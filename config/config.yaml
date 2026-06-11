@@ -1,0 +1,4 @@
+paths:
+  raw_csv: "data/raw/"
+  interim_dir: "data/interim"
+  reports_dir: "reports"
