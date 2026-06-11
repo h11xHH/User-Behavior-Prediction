@@ -1,10 +1,11 @@
-# We add ignore rules as we add the things they protect (kept lean on purpose).
-
 # Data (large, regenerable — never commit)
 data/raw/*
 data/interim/*
 !data/raw/.gitkeep        # keep the empty folder tracked in git
 !data/interim/.gitkeep
+
+# MySQL credentials (sensitive)
+config/secrets.yaml
 
 # Python environment & caches
 .venv/

@@ -20,7 +20,7 @@ import yaml
 # project. We deliberately start with only `paths` and append new required
 # sections as later phases introduce them (e.g. "data" in Phase 1). This keeps
 # the config and its validation in lock-step with the code that actually exists.
-REQUIRED_SECTIONS: tuple[str, ...] = ("paths",)
+REQUIRED_SECTIONS: tuple[str, ...] = ("paths", "data", "database")
 
 
 @dataclass(frozen=True)
@@ -44,8 +44,18 @@ class Config:
         """Return the `paths` section of the config (dict)."""
         return self.raw["paths"]
 
-    # NOTE: accessors for future sections (data, labeling, features, model) will
-    # be added here when the phase that needs them arrives — not before.
+    @property
+    def data(self) -> dict[str, Any]:
+        """Return the `data` section of the config (dict). Added in Phase 1."""
+        return self.raw["data"]
+ 
+    @property
+    def database(self) -> dict[str, Any]:
+        """Return the `database` section of the config (dict). Added in Phase 1."""
+        return self.raw["database"]
+    
+    # NOTE: accessors for future sections (labeling, features, model) will be
+    # added here when the phase that needs them arrives — not before.
 
     def resolve_path(self, relative_path: str) -> Path:
         """Turn a config-relative path string into an absolute Path.
@@ -141,7 +151,6 @@ if __name__ == "__main__":
         print("Config loaded successfully.")
         print(f"  project_root : {config.project_root}")
         print(f"  raw_csv      : {config.resolve_path(config.paths['raw_csv'])}")
-        print(f"  interim_dir  : {config.resolve_path(config.paths['interim_dir'])}")
-        print(f"  reports_dir  : {config.resolve_path(config.paths['reports_dir'])}")
+        print(f"  table_raw  : {config.resolve_path(config.paths['table_raw'])}")
     except (FileNotFoundError, ValueError) as error:
         print(f"Failed to load config: {error}")

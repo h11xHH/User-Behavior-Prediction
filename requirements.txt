@@ -1,2 +1,9 @@
 pyyaml>=6.0      # read config.yaml
 ruff>=0.4        # linter / formatter (PEP8 checks)
+
+pandas>=2.0
+pyarrow>=14.0        # save/load interim tables as Parquet
+matplotlib>=3.7      # the four exploration charts
+SQLAlchemy>=2.0      # engine used by pandas to read query results
+PyMySQL>=1.1         # the actual MySQL driver
+cryptography>=42.0   # lets PyMySQL handle MySQL 8's caching_sha2_password auth
