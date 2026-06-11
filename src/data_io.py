@@ -1,17 +1,14 @@
 """data_io.py
 
-Database access layer for the project. Responsibilities:
-  - read MySQL credentials from the (git-ignored) secrets file;
-  - build a SQLAlchemy engine configured for LOCAL INFILE bulk loading;
-  - create the raw table and bulk-load the raw CSV into it;
-  - run read-only SQL queries and return the result as a pandas DataFrame.
+Database access layer for the project. It do the following:
+1. reads credentials from the secrets file;
+2. builds a SQLAlchemy engine with LOCAL INFILE enabled;
+3. creates the raw table and bulk-loads the CSV into it;
+4. runs read-only SQL queries and returns the result as a pandas DataFrame.
 
-Note: LOAD DATA LOCAL INFILE needs `local_infile` enabled on BOTH sides — the
-client (we pass it in make_engine) and the server (you run `SET GLOBAL
-local_infile = 1;` once as the MySQL admin).
+Must enable local_infile.
 
-Run standalone to (re)load the CSV into MySQL and print the row count:
-    python -m src.data_io
+Run: python -m src.data_io
 """
 
 from __future__ import annotations
@@ -28,31 +25,21 @@ from src.config_loader import load_config
 
 
 def load_secrets(secrets_path: str | Path) -> dict[str, Any]:
-    """Read the MySQL credentials from the git-ignored secrets file.
+    """Read the MySQL credentials from the secrets file.
 
     Input
     -----
     secrets_path : str | Path
-        Path to config/secrets.yaml (relative to the project root or absolute).
+        Path to config/secrets.yaml.
 
     Output
     ------
     dict[str, Any]
         The 'mysql' sub-mapping with keys host, port, user, password, database.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the secrets file is missing (with a hint to copy the example).
-    ValueError
-        If the file lacks a 'mysql' section or a required key.
     """
     path = Path(secrets_path).resolve()
     if not path.exists():
-        raise FileNotFoundError(
-            f"Secrets file not found at '{path}'. Copy "
-            f"config/secrets.example.yaml to config/secrets.yaml and fill it in."
-        )
+        raise FileNotFoundError(f"Secrets file not found at '{path}'. ")
 
     with path.open("r", encoding="utf-8") as handle:
         parsed = yaml.safe_load(handle)
@@ -80,11 +67,6 @@ def make_engine(creds: dict[str, Any]) -> Engine:
     ------
     sqlalchemy.engine.Engine
         Engine usable by pandas (pd.read_sql) and for raw SQL execution.
-
-    Logic
-    -----
-    `connect_args={"local_infile": 1}` permits LOAD DATA LOCAL INFILE on the
-    client side. The server must independently have local_infile turned on.
     """
     url = (
         f"mysql+pymysql://{creds['user']}:{creds['password']}"
@@ -93,9 +75,7 @@ def make_engine(creds: dict[str, Any]) -> Engine:
     return create_engine(url, connect_args={"local_infile": 1})
 
 
-# DDL for the raw table. IDs are VARCHAR to honour the project rule "IDs are
-# strings, never do arithmetic on them"; behavior_type is a small int (1-4);
-# time is a real DATETIME so SQL date functions work in the exploration phase.
+# Using real DATETIME for time so SQL date functions work.
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS {table} (
     user_id       VARCHAR(20) NOT NULL,
@@ -106,11 +86,9 @@ CREATE TABLE IF NOT EXISTS {table} (
 )
 """
 
-# Bulk load. The raw 'time' values are hour-only ("YYYY-MM-DD HH"), so we read
-# the raw field into a variable and convert it with STR_TO_DATE (minutes and
-# seconds default to 00). TRIM TRAILING '\r' makes the load robust to
-# Windows-style CRLF line endings, where the last field would otherwise keep a
-# trailing carriage return and fail to parse.
+
+# Raw time is YYYY-MM-DD HH, use STR_TO_DATE to convert to DATETIME.
+# Remove trailing \r to avoid parsing errors.
 _LOAD_SQL = r"""
 LOAD DATA LOCAL INFILE '{csv_path}'
 INTO TABLE {table}
@@ -139,9 +117,9 @@ def _ensure_indexes(engine: Engine, table_name: str) -> None:
     Logic / optimization
     --------------------
     The exploration phase groups by user, item, and time a lot. Indexes on those
-    columns make those group-bys fast. We add them AFTER the bulk load (indexing
-    during load would slow the load). On a re-load the table still exists, so a
-    duplicate-index error is expected and safely ignored.
+    columns make those group-bys fast. They are added after the bulk load. On a 
+    re-load the table still exists, so a duplicate-index error is expected and 
+    safely ignored.
     """
     statements = [
         f"CREATE INDEX idx_{table_name}_user ON {table_name} (user_id)",
@@ -169,28 +147,16 @@ def create_and_load_raw_table(engine: Engine, csv_path: str | Path, table_name: 
     Input
     -----
     engine : Engine
-        SQLAlchemy engine built by make_engine (local_infile enabled).
+        SQLAlchemy engine built by make_engine.
     csv_path : str | Path
         Absolute path to the raw CSV.
     table_name : str
-        Target table name (from config.database['table_raw']).
+        From config.database['table_raw'].
 
     Output
     ------
     int
         Number of rows in the table after loading.
-
-    Logic
-    -----
-    1. CREATE TABLE IF NOT EXISTS with the schema above.
-    2. TRUNCATE first so re-running this gives a clean, idempotent reload rather
-       than appending duplicates.
-    3. LOAD DATA LOCAL INFILE the whole file in one fast bulk operation.
-    4. Add helper indexes, then count the rows.
-
-    We execute via the raw DBAPI cursor (not SQLAlchemy text()) because the load
-    statement contains '%' characters in the date format string, which the
-    driver's parameter handling would otherwise misinterpret.
     """
     csv_literal = Path(csv_path).resolve().as_posix().replace("'", "''")
     create_sql = _CREATE_TABLE_SQL.format(table=table_name)
@@ -250,7 +216,6 @@ def read_query(engine: Engine, sql: str) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    # One-shot loader: read config + secrets, connect, bulk-load the CSV, report.
     try:
         config = load_config()
         creds = load_secrets(config.resolve_path(config.database["secrets_file"]))
@@ -261,5 +226,5 @@ if __name__ == "__main__":
         print(f"Loading '{csv_path}' into MySQL table '{table_name}' ...")
         row_count = create_and_load_raw_table(engine, csv_path, table_name)
         print(f"Done. Rows in '{table_name}': {row_count:,}")
-    except Exception as error:  # noqa: BLE001  (CLI entry: report any failure clearly)
+    except Exception as error:
         print(f"Load failed: {error}")
