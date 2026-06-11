@@ -1,14 +1,13 @@
-# Data (large, regenerable — never commit)
+# Data
 data/raw/*
 data/interim/*
 !data/raw/.gitkeep        # keep the empty folder tracked in git
 !data/interim/.gitkeep
 
-# MySQL credentials (sensitive)
+# MySQL credentials
 config/secrets.yaml
 
 # Python environment & caches
-.venv/
 __pycache__/
 *.pyc
 .ruff_cache/
