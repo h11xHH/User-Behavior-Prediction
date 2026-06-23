@@ -4,11 +4,14 @@ paths:
   reports_dir: "reports"
 
 data:
-  date_start: null
-  date_end: null
+  date_start: "2014-11-18"
+  date_end: "2014-12-18"
   id_columns: ["user_id", "item_id", "item_category"]
-  row_sample_cap: null
 
 database:
   table_raw: "raw_behavior"
   secrets_file: "config/secrets.yaml"
+
+labeling:
+  prediction_dates: ["2014-12-12"]
+  candidate_lookback_days: 3

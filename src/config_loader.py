@@ -16,7 +16,7 @@ import yaml
 
 
 # Define sections that must be present in config.yaml
-REQUIRED_SECTIONS: tuple[str, ...] = ("paths", "data", "database")
+REQUIRED_SECTIONS: tuple[str, ...] = ("paths", "data", "database", "labeling")
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,11 @@ class Config:
     def database(self) -> dict[str, Any]:
         """Return the `database` section of the config (dict)."""
         return self.raw["database"]
+
+    @property
+    def labeling(self) -> dict[str, Any]:
+        """Return the `labeling` section of the config (dict)."""
+        return self.raw["labeling"]
 
     def resolve_path(self, relative_path: str) -> Path:
         """Turn a relative path into an absolute path.
@@ -117,5 +122,7 @@ if __name__ == "__main__":
         print(f"  project_root : {config.project_root}")
         print(f"  raw_csv      : {config.resolve_path(config.paths['raw_csv'])}")
         print(f"  table_raw  : {config.database['table_raw']}")
+        print(f" prediction_dates : {config.labeling['prediction_dates']}")
+        print(f" candidate_lookback_days : {config.labeling['candidate_lookback_days']}")
     except (FileNotFoundError, ValueError) as error:
         print(f"Failed to load config: {error}")
