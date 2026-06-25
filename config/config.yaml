@@ -13,5 +13,21 @@ database:
   secrets_file: "config/secrets.yaml"
 
 labeling:
-  prediction_dates: ["2014-12-12"]
+  prediction_dates:
+    - "2014-12-06"
+    - "2014-12-07"
+    - "2014-12-08"
+    - "2014-12-09"
+    - "2014-12-10"
+    - "2014-12-11"
+    - "2014-12-12"
+    - "2014-12-13"
+    - "2014-12-14"
+    - "2014-12-15"
+    - "2014-12-16"
+    - "2014-12-17"
+    - "2014-12-18"
   candidate_lookback_days: 3
+
+features:
+  count_windows_days: [1, 7, 0]
