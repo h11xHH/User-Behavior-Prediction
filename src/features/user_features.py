@@ -1,28 +1,24 @@
 """features/user_features.py
 
-Phase 5: build the feat_user table, keyed by (user_id, cutoff_date), using only
-behaviour with time < D. Builds one prediction day at a time, then combines all
-the per-day tables into a single stacked feat_user.parquet spanning every
-configured cutoff date.
+Build the feat_user table, using only behaviour with time < D. Builds one 
+prediction day at a time, then combines all per-day tables into one stacked 
+feat_user.parquet.
 
-Pattern (used by every feature builder): MySQL does the heavy GROUP BY, pandas
-does the light derivation. Per day, two queries run:
-  1. counts query -> per user: windowed browse counts, all-history fav/cart/buy,
-     and the user's last action time (for recency).
-  2. hour query   -> per (user, hour-of-day): total / browse / buy counts, the
-     raw material for the 24-hour histogram, peak hours, fractions, entropy.
-
-Resumability: a day whose per-day file already exists is skipped, so an
-interrupted run resumes where it left off. To force a rebuild (e.g. after
-changing windows), delete the relevant feat_user__*.parquet files.
-
-Run standalone:
-    python -m src.features.user_features
+Features produced:
+  user_browse_{w} | windowed browse counts (w from config; 0 -> 'all')
+  user_favorite_all, user_cart_all, user_buy_all
+  user_conversion_browse_buy = buy_all / browse_all
+  user_conversion_cart_buy = buy_all / cart_all
+  user_since_last_hour | hours from last action to D
+  user_peak_hour, user_browse_peak_hour, user_buy_peak_hour   (-1 if undefined)
+  user_morning_fraction (6-11), user_afternoon_fraction (12-17),
+  user_night_fraction (18-23 + 0-5)
+  user_hour_entropy | Shannon entropy (base 2) of the 24-hour histogram
+  user_action_0 .. user_action_23   actions per hour-of-day
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -31,33 +27,23 @@ from sqlalchemy.engine import Engine
 
 from src.config_loader import load_config
 from src.data_io import load_secrets, make_engine, read_query
+from src.features.common import ALL_HOURS, day_midnight, hist_to_wide, peak_hour, window_start
 
-_FMT = "%Y-%m-%d %H:%M:%S"
 MORNING_HOURS = [6, 7, 8, 9, 10, 11]
 AFTERNOON_HOURS = [12, 13, 14, 15, 16, 17]
 NIGHT_HOURS = [18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5]
 
 
-def _window_start(prediction_date: str, window_days: int) -> str:
-    """Return the 'YYYY-MM-DD HH:MM:SS' start of a window_days window before D."""
-    day = datetime.strptime(prediction_date, "%Y-%m-%d")
-    return (day - timedelta(days=window_days)).strftime(_FMT)
-
-
 def build_user_counts(engine: Engine, table: str, prediction_date: str,
                       windows: list[int]) -> pd.DataFrame:
-    """Per-user windowed browse counts + all-history fav/cart/buy + last action.
-
-    Output columns: user_id, user_browse_{w}..., user_favorite_all,
-    user_cart_all, user_buy_all, last_action_time.
-    """
-    d_start = datetime.strptime(prediction_date, "%Y-%m-%d").strftime(_FMT)
+    """Per-user windowed browse counts + all-history fav/cart/buy + last action."""
+    d_start = day_midnight(prediction_date)
     browse_selects = []
     for window in windows:
         if window == 0:
             browse_selects.append("SUM(behavior_type = 1) AS user_browse_all")
         else:
-            w_start = _window_start(prediction_date, window)
+            w_start = window_start(prediction_date, window)
             browse_selects.append(
                 f"SUM(behavior_type = 1 AND time >= '{w_start}') AS user_browse_{window}d"
             )
@@ -78,7 +64,7 @@ def build_user_counts(engine: Engine, table: str, prediction_date: str,
 
 def build_user_hour_histogram(engine: Engine, table: str, prediction_date: str) -> pd.DataFrame:
     """Per (user, hour-of-day): total / browse / buy counts (long format)."""
-    d_start = datetime.strptime(prediction_date, "%Y-%m-%d").strftime(_FMT)
+    d_start = day_midnight(prediction_date)
     sql = f"""
         SELECT
             user_id,
@@ -93,38 +79,23 @@ def build_user_hour_histogram(engine: Engine, table: str, prediction_date: str) 
     return read_query(engine, sql)
 
 
-def _peak_hour(wide: pd.DataFrame) -> pd.Series:
-    """Argmax hour per user (ties -> earliest hour); -1 where the row is all zeros."""
-    peak = wide.idxmax(axis=1)          # idxmax returns the first (smallest) hour on ties
-    peak[wide.sum(axis=1) == 0] = -1    # undefined when there are no such actions
-    return peak.astype("int64")
-
-
 def derive_hour_features(hist: pd.DataFrame) -> pd.DataFrame:
     """Turn the long hour histogram into per-user timing features.
 
-    Input : long DataFrame (user_id, hod, action_cnt, browse_cnt, buy_cnt).
-    Output: DataFrame indexed by user_id with action_0..23, the three peak hours,
+    Output: DataFrame indexed by user_id with action_0/1/.../23, the three peak hours,
             morning/afternoon/night fractions, and hour entropy.
     Pure pandas, so it is unit-testable without a database.
     """
-    all_hours = list(range(24))
-
-    def to_wide(value_col: str) -> pd.DataFrame:
-        wide = hist.pivot_table(index="user_id", columns="hod", values=value_col,
-                                aggfunc="sum", fill_value=0)
-        return wide.reindex(columns=all_hours, fill_value=0)
-
-    action_wide = to_wide("action_cnt")
-    browse_wide = to_wide("browse_cnt")
-    buy_wide = to_wide("buy_cnt")
+    action_wide = hist_to_wide(hist, "user_id", "action_cnt")
+    browse_wide = hist_to_wide(hist, "user_id", "browse_cnt")
+    buy_wide = hist_to_wide(hist, "user_id", "buy_cnt")
 
     total = action_wide.sum(axis=1)
     out = pd.DataFrame(index=action_wide.index)
 
-    out["user_peak_hour"] = _peak_hour(action_wide)
-    out["user_browse_peak_hour"] = _peak_hour(browse_wide)
-    out["user_buy_peak_hour"] = _peak_hour(buy_wide)
+    out["user_peak_hour"] = peak_hour(action_wide)
+    out["user_browse_peak_hour"] = peak_hour(browse_wide)
+    out["user_buy_peak_hour"] = peak_hour(buy_wide)
 
     out["user_morning_fraction"] = action_wide[MORNING_HOURS].sum(axis=1) / total
     out["user_afternoon_fraction"] = action_wide[AFTERNOON_HOURS].sum(axis=1) / total
@@ -137,7 +108,7 @@ def derive_hour_features(hist: pd.DataFrame) -> pd.DataFrame:
     log_term[mask] = np.log2(proportion[mask])
     out["user_hour_entropy"] = -(proportion * log_term).sum(axis=1)
 
-    action_cols = action_wide.rename(columns={h: f"user_action_{h}" for h in all_hours})
+    action_cols = action_wide.rename(columns={h: f"user_action_{h}" for h in ALL_HOURS})
     return out.join(action_cols)
 
 
@@ -165,7 +136,7 @@ def build_user_features(engine: Engine, table: str, prediction_date: str,
     frame[["user_conversion_browse_buy", "user_conversion_cart_buy"]] = (
         frame[["user_conversion_browse_buy", "user_conversion_cart_buy"]].fillna(0.0))
 
-    d_start = pd.Timestamp(datetime.strptime(prediction_date, "%Y-%m-%d"))
+    d_start = pd.Timestamp(day_midnight(prediction_date))
     delta_hours = (d_start - pd.to_datetime(frame["last_action_time"])).dt.total_seconds() / 3600.0
     frame["user_since_last_hour"] = delta_hours.round().astype("int64")
 
@@ -186,12 +157,7 @@ def save_user_features(frame: pd.DataFrame, interim_dir: Path, prediction_date: 
 
 
 def combine_user_features(interim_dir: Path, dates: list[str]) -> Path:
-    """Stack the per-day feat_user files for `dates` into one feat_user.parquet.
-
-    Input : interim_dir and the list of cutoff dates that have been built.
-    Output: path to the combined table, keyed by (user_id, cutoff_date).
-    Raises: FileNotFoundError if any per-day file is missing.
-    """
+    """Stack the per-day feat_user files for `dates` into one feat_user.parquet."""
     frames = []
     for prediction_date in dates:
         per_day = interim_dir / f"feat_user__{prediction_date}.parquet"
@@ -207,14 +173,8 @@ def combine_user_features(interim_dir: Path, dates: list[str]) -> Path:
 
 
 def main() -> None:
-    """Build feat_user for every configured cutoff date, then combine them.
-
-    Resumable: a day whose per-day file exists is skipped. Each external step
-    (config, DB, per-day build, combine) is wrapped so a failure reports what
-    failed and why, with the original cause preserved in the traceback.
-    """
+    """Build feat_user for every configured cutoff date, then combine them."""
     config = load_config()
-
     try:
         table = config.database["table_raw"]
         secrets_path = config.resolve_path(config.database["secrets_file"])
@@ -264,7 +224,7 @@ if __name__ == "__main__":
 
     try:
         main()
-    except Exception as error:  # top-level guard: report clearly, never hide the cause
+    except Exception as error:
         print(f"user_features failed: {type(error).__name__}: {error}", file=sys.stderr)
         traceback.print_exc()
         sys.exit(1)
