@@ -31,3 +31,9 @@ labeling:
 
 features:
   count_windows_days: [1, 7, 0]
+
+split:
+  test_dates: ["2014-12-18"]
+  first_val_date: "2014-12-10"
+  negative_ratio: 20
+  seed: 48
