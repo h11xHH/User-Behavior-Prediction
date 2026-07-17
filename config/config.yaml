@@ -37,3 +37,16 @@ split:
   first_val_date: "2014-12-10"
   negative_ratio: 20
   seed: 48
+
+xgboost:
+  negative_ratios: [5, 10, 20, 50] # negative downsampling ratio, tuned as a hyperparameter
+  include_full: true # no-downsampling + scale_pos_weight
+  seeds: [42, 43] # average downsampled configs over these seeds
+  early_stopping_rounds: 30 # early stop on val aucpr
+  params:
+    max_depth: 6
+    learning_rate: 0.1
+    n_estimators: 600 # upper bound; early stopping picks the count
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_weight: 1
